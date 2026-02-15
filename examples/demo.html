@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebMCP Shim — Bridge Demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; font-size: 0.85rem; }
+    .status { padding: 0.4rem 0.8rem; border-radius: 4px; display: inline-block; }
+    .connected { background: #d4edda; color: #155724; }
+    .disconnected { background: #f8d7da; color: #721c24; }
+  </style>
+</head>
+<body>
+  <h1>WebMCP Bridge Demo</h1>
+  <p>
+    This page registers tools via the <code>navigator.modelContext</code> shim
+    and bridges them to the bridge server over WebSocket.
+    External LLM clients (Claude Code, Cursor, etc.) can discover and call
+    these tools via the server's HTTP API.
+  </p>
+  <p>Status: <span id="status" class="status disconnected">Disconnected</span></p>
+  <h3>Log</h3>
+  <pre id="log"></pre>
+
+  <script type="module">
+    import { ModelContext } from "/dist/shim.js";
+
+    const logEl = document.getElementById("log");
+    const statusEl = document.getElementById("status");
+
+    const log = (msg) => {
+      console.log(msg);
+      logEl.textContent += msg + "\n";
+    };
+
+    // ---- Install the polyfill ----
+
+    if (!navigator.modelContext) {
+      navigator.modelContext = new ModelContext();
+    }
+    const mc = navigator.modelContext;
+
+    // ---- Register some demo tools ----
+
+    mc.registerTool({
+      name: "get_weather",
+      description: "Get the current weather for a city",
+      inputSchema: {
+        type: "object",
+        properties: {
+          city: { type: "string", description: "City name" },
+        },
+        required: ["city"],
+      },
+      execute(input) {
+        log(`[tool] get_weather called with ${JSON.stringify(input)}`);
+        const forecasts = {
+          Tokyo: { temperature: 22, condition: "sunny" },
+          London: { temperature: 14, condition: "cloudy" },
+          NYC: { temperature: 18, condition: "partly cloudy" },
+        };
+        const data = forecasts[input.city] ?? { temperature: 20, condition: "unknown" };
+        return { ...data, unit: "C", city: input.city };
+      },
+    });
+
+    mc.registerTool({
+      name: "add_to_cart",
+      description: "Add an item to the shopping cart",
+      inputSchema: {
+        type: "object",
+        properties: {
+          item: { type: "string", description: "Item name" },
+          quantity: { type: "number", description: "Quantity to add" },
+        },
+        required: ["item"],
+      },
+      execute(input) {
+        const qty = input.quantity ?? 1;
+        log(`[tool] add_to_cart: added ${qty}x "${input.item}"`);
+        return { ok: true, item: input.item, quantity: qty };
+      },
+    });
+
+    log(`Registered ${mc.getTools().length} tools: ${mc.getTools().map(t => t.name).join(", ")}`);
+
+    // ---- Connect to the bridge server via WebSocket ----
+
+    function connect() {
+      const ws = new WebSocket(`ws://${location.host}`);
+
+      ws.addEventListener("open", () => {
+        statusEl.textContent = "Connected";
+        statusEl.className = "status connected";
+        log("[ws] Connected to bridge server");
+        // Send current tools immediately
+        sendTools(ws);
+      });
+
+      // When tools change, push the new list to the bridge
+      mc.addEventListener("change", () => sendTools(ws));
+
+      ws.addEventListener("message", async (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === "execute") {
+          log(`[ws] Execute request: ${msg.name}(${JSON.stringify(msg.input)})`);
+          try {
+            const result = await mc.executeTool(msg.name, msg.input);
+            ws.send(JSON.stringify({ type: "result", id: msg.id, result }));
+            log(`[ws] Sent result for ${msg.name}`);
+          } catch (err) {
+            ws.send(JSON.stringify({ type: "error", id: msg.id, error: err.message }));
+            log(`[ws] Error executing ${msg.name}: ${err.message}`);
+          }
+        }
+      });
+
+      ws.addEventListener("close", () => {
+        statusEl.textContent = "Disconnected";
+        statusEl.className = "status disconnected";
+        log("[ws] Disconnected — reconnecting in 2s");
+        setTimeout(connect, 2000);
+      });
+    }
+
+    function sendTools(ws) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "tools", tools: mc.getTools() }));
+      }
+    }
+
+    connect();
+  </script>
+</body>
+</html>
