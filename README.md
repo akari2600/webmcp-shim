@@ -9,23 +9,25 @@ The WebMCP spec defines a browser-native way for pages to register tools that AI
 ## How it works
 
 ```
-Browser page              Shim              Bridge server           LLM client
-  │                        │                     │                     │
-  │─ registerTool(tool) ──→│                     │                     │
-  │                        │── tools (WS) ──────→│                     │
-  │                        │                     │←─ GET /tools ───────│
-  │                        │                     │── tool defs ───────→│
-  │                        │                     │                     │
-  │                        │                     │←─ POST /execute ────│
-  │                        │←── execute (WS) ────│                     │
-  │← execute callback ────│                     │                     │
-  │─ result ──────────────→│── result (WS) ─────→│── result ──────────→│
+Browser page              Shim              Bridge server        MCP server         LLM client
+  │                        │                     │                   │                  │
+  │─ registerTool(tool) ──→│                     │                   │                  │
+  │                        │── tools (WS) ──────→│                   │                  │
+  │                        │                     │←── GET /tools ────│                  │
+  │                        │                     │                   │←─ list_tools ────│
+  │                        │                     │                   │── tool defs ────→│
+  │                        │                     │                   │                  │
+  │                        │                     │                   │←─ call_tool ─────│
+  │                        │                     │←── POST /execute ─│                  │
+  │                        │←── execute (WS) ────│                   │                  │
+  │← execute callback ────│                     │                   │                  │
+  │─ result ──────────────→│── result (WS) ─────→│── result ────────→│── result ───────→│
 ```
 
 1. A page loads the shim and calls `navigator.modelContext.registerTool()`
 2. The bridge server picks up registered tools over WebSocket
-3. External LLM clients call `GET /tools` to discover tools and `POST /tools/:name/execute` to invoke them
-4. The bridge relays execution to the page and returns the result
+3. The MCP server polls the bridge and exposes tools to LLM clients via the Model Context Protocol
+4. When the LLM calls a tool, the request flows back through the MCP server → bridge → page
 
 ## Quick start
 
@@ -49,14 +51,65 @@ curl -X POST http://localhost:3001/tools/get_weather/execute \
   -d '{"city": "Tokyo"}'
 ```
 
-### Using with Claude Code
+### Adding the MCP server to your LLM client
 
-Point Claude Code at the bridge server's HTTP endpoints. For example, in an MCP server config or custom tool integration:
+The bridge server exposes tools over HTTP. The included MCP server (`examples/mcp-server.mjs`) wraps those HTTP endpoints in the [Model Context Protocol](https://modelcontextprotocol.io/) so Claude Code, Cursor, and other MCP-compatible clients can pick up tools automatically.
 
-- **Tool discovery**: `GET http://localhost:3001/tools` returns an array of `{ name, description, input_schema }` — the same shape the Anthropic tool use API expects
-- **Tool execution**: `POST http://localhost:3001/tools/<name>/execute` with a JSON body matching the tool's `input_schema`
+**1. Start the bridge server** (keep this running):
 
-Any LLM client that can make HTTP requests can use the same pattern.
+```bash
+npm run demo
+```
+
+**2. Open the demo page** at `http://localhost:3001` in a browser so tools get registered.
+
+**3. Add the MCP server to your client config:**
+
+**Claude Code** — add to `~/.claude/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "webmcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/webmcp-shim/examples/mcp-server.mjs"]
+    }
+  }
+}
+```
+
+**Cursor** — add to `.cursor/mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "webmcp": {
+      "command": "node",
+      "args": ["/absolute/path/to/webmcp-shim/examples/mcp-server.mjs"]
+    }
+  }
+}
+```
+
+Replace `/absolute/path/to/webmcp-shim` with the actual path to this repo.
+
+If the bridge is on a different host or port, pass `--bridge-url`:
+
+```json
+{
+  "mcpServers": {
+    "webmcp": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/webmcp-shim/examples/mcp-server.mjs",
+        "--bridge-url", "http://192.168.1.50:3001"
+      ]
+    }
+  }
+}
+```
+
+Once configured, any tools the page registers via `navigator.modelContext.registerTool()` appear as callable tools in your LLM client. The MCP server polls the bridge every 2 seconds for changes.
 
 ## Install
 
