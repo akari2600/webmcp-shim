@@ -2,6 +2,29 @@
 
 A polyfill for the [Web Model Context Protocol](https://webmachinelearning.github.io/webmcp/) `navigator.modelContext` API.
 
+![webmcp-shim](webmcp-shim.jpg)
+
+## Table of contents
+
+- [Why](#why)
+- [How it works](#how-it-works)
+- [Quick start](#quick-start)
+  - [Adding the MCP server to your LLM client](#adding-the-mcp-server-to-your-llm-client)
+- [Install](#install)
+- [Build from source](#build-from-source)
+- [Usage](#usage)
+  - [As a polyfill](#as-a-polyfill)
+  - [Registering tools (page code)](#registering-tools-page-code)
+  - [Consumer API (non-spec, for chat clients)](#consumer-api-non-spec-for-chat-clients)
+- [API reference](#api-reference)
+  - [Spec surface](#spec-surface)
+  - [Consumer API](#consumer-api)
+  - [Bridge server HTTP API](#bridge-server-http-api)
+- [Browser support](#browser-support)
+- [Migrating to the native API](#migrating-to-the-native-api)
+- [Spec reference](#spec-reference)
+- [License](#license)
+
 ## Why
 
 The WebMCP spec defines a browser-native way for pages to register tools that AI agents can discover and invoke. No browser ships it yet. This shim lets page code adopt the API today, and includes a bridge server so external LLM clients — Claude Code, Cursor, or anything that can call HTTP — can discover and execute those tools.
@@ -207,6 +230,20 @@ The shim targets ES2020. It works in all modern browsers:
 - Safari 14+
 
 The bridge server requires Node.js 18+.
+
+## Migrating to the native API
+
+This shim is designed to be removed. The spec surface (`registerTool`, `unregisterTool`, `provideContext`, `clearContext`) matches the [WebMCP spec](https://webmachinelearning.github.io/webmcp/) so your page code won't need to change when browsers ship native support.
+
+When `navigator.modelContext` is available natively:
+
+1. **Remove the shim import.** The polyfill already skips installation when a native implementation is detected (`if (!navigator.modelContext)`), so your page code continues to work either way. Once you've confirmed the native API is present in your target browsers, delete the `import "webmcp-shim"` line entirely.
+
+2. **Remove the bridge server and MCP server.** With native support, the browser itself handles the consumer side — discovering tools and routing execution between the page and the AI agent. The bridge and MCP server are only needed because today's browsers don't have that plumbing.
+
+3. **Remove the consumer API calls.** `getTools()`, `executeTool()`, and `addEventListener('change', fn)` are non-spec additions for the chat client. The browser will handle tool dispatch natively, so the chat client no longer needs to poll or proxy tool calls.
+
+In short: your `registerTool()` / `unregisterTool()` page code stays the same, and everything else goes away.
 
 ## Spec reference
 
